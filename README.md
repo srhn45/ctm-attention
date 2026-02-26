@@ -37,6 +37,8 @@ The key implementation lives in `compute_attention_synchronisation` inside `Cont
 
 ## Results
 
+Results can be found under the examples folder, in the respective notebooks.
+
 All hyperparameters were kept identical to the baselines in the original example notebooks, except where noted.
 
 | Task | Baseline Train Acc | CTM_Attn Train Acc | Baseline Test Acc | CTM_Attn Test Acc |
