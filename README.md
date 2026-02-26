@@ -1,154 +1,118 @@
-# 🕰️ The Continuous Thought Machine
+# CTM with Attention-Based Synchronisation
 
-📚 [PAPER: Technical Report](https://arxiv.org/abs/2505.05522) | 📝 [Blog](https://sakana.ai/ctm/) | 🕹️ [Interactive Website](https://pub.sakana.ai/ctm) | ✏️ [Tutorial](examples/01_mnist.ipynb)
+A fork of [Sakana AI's Continuous Thought Machine](https://github.com/SakanaAI/continuous-thought-machines) that replaces random neuron-pair sampling for synchronisation with a learnable attention mechanism.
 
-![Activations](assets/activations.gif)
+**Original paper:** [Continuous Thought Machines](https://arxiv.org/abs/2505.05522)  
+**Original repo:** [SakanaAI/continuous-thought-machines](https://github.com/SakanaAI/continuous-thought-machines)
 
-We present the Continuous Thought Machine (CTM), a model designed to unfold and then leverage neural activity as the underlying mechanism for observation and action. Our contributions are:
+---
 
-1. An internal temporal axis, decoupled from any input data, that enables neuron activity to unfold.
+## Motivation
 
-2. Neuron-level temporal processing, where each neuron uses unique weight parameters to process a history of incoming signals, enabling fine-grained temporal dynamics.
+In the original CTM, synchronisation representations (S_out and S_action) are computed by randomly sampling pairs of neurons (i, j) and measuring the cosine similarity of their activation histories. This is effective but throws away information — the sampling is random, so potentially important neuron-pair relationships can be missed.
 
-3. Neural synchronisation, employed as a direct latent representation for modulating data and producing outputs, thus directly encoding information in the timing of neural activity.
+The core question motivating this fork: **can we compute synchronisation using all neurons while keeping a learnable inductive bias?**
 
-We demonstrate the CTM's strong performance and versatility across a range of challenging tasks, including ImageNet classification, solving 2D mazes, sorting, parity computation, question-answering, and RL tasks.
+---
 
-We provide all necessary code to reproduce our results and invite others to build upon and use CTMs in their own work.
+## The Change: Attention Over Neuron History
 
-## [Interactive Website](https://pub.sakana.ai/ctm)
-Please see our [Interactive Website](https://pub.sakana.ai/ctm) for a maze-solving demo, many demonstrative videos of the method, results, and other findings. 
+Instead of randomly sampling neuron pairs and computing cosine similarity, this implementation computes synchronisation via an attention mechanism over the full activation history.
 
+**The intuition:** treat each neuron as a token, and its history of post-activations as its embedding. This lets every neuron attend to every other neuron based on their full temporal pattern — a direct generalisation of pairwise cosine similarity into a learnable form.
 
-## Repo structure
-```
-├── tasks
-│   ├── image_classification
-│   │   ├── train.py                          # Training code for image classification (cifar, imagenet)
-│   │   ├── imagenet_classes.py               # Helper for imagenet class names
-│   │   ├── plotting.py                       # Plotting utils specific to this task
-│   │   └── analysis
-│   │       ├──run_imagenet_analysis.py       # ImageNet eval and visualisation code
-│   │       └──outputs/                       # Folder for outputs of analysis
-│   ├── mazes
-│   │   ├── train.py                          # Training code for solving 2D mazes (by way of a route; see paper)
-│   │   └── plotting.py                       # Plotting utils specific to this task
-│   │   └── analysis
-│   │       ├──run.py                         # Maze analysis code
-│   │       └──outputs/                       # Folder for outputs of analysis
-│   ├── sort
-│   │   ├── train.py                          # Training code for sorting
-│   │   └── utils.py                          # Sort specific utils (e.g., CTC decode)
-│   ├── parity
-│   │   ├── train.py                          # Training code for parity task
-│   │   ├── utils.py                          # Parity-specific helper functions
-│   │   ├── plotting.py                       # Plotting utils specific to this task
-│   │   ├── scripts/
-│   │   │   └── *.sh                          # Training scripts for different experimental setups
-│   │   └── analysis/
-│   │       └── run.py                        # Entry point for parity analysis
-│   ├── qamnist
-│   │   ├── train.py                          # Training code for QAMNIST task (quantized MNIST)
-│   │   ├── utils.py                          # QAMNIST-specific helper functions
-│   │   ├── plotting.py                       # Plotting utils specific to this task
-│   │   ├── scripts/
-│   │   │   └── *.sh                          # Training scripts for different experimental setups
-│   │   └── analysis/
-│   │       └── run.py                        # Entry point for QAMNIST analysis
-│   └── rl
-│       ├── train.py                          # Training code for RL environments
-│       ├── utils.py                          # RL-specific helper functions
-│       ├── plotting.py                       # Plotting utils specific to this task
-│       ├── envs.py                           # Custom RL environment wrappers
-│       ├── scripts/
-│       │   ├── 4rooms/
-│       │   │   └── *.sh                      # Training scripts for MiniGrid-FourRooms-v0 environment
-│       │   ├── acrobot/
-│       │   │   └── *.sh                      # Training scripts for Acrobot-v1 environment
-│       │   └── cartpole/
-│       │       └── *.sh                      # Training scripts for CartPole-v1 environment
-│       └── analysis/
-│           └── run.py                        # Entry point for RL analysis
-├── data                                      # This is where data will be saved and downloaded to
-│   └── custom_datasets.py                    # Custom datasets (e.g., Mazes), sort
-├── models
-│   ├── ctm.py                                # Main model code, used for: image classification, solving mazes, sort
-│   ├── ctm_*.py                              # Other model code, standalone adjustments for other tasks
-│   ├── ff.py                                 # feed-forward (simple) baseline code (e.g., for image classification)
-│   ├── lstm.py                               # LSTM baseline code (e.g., for image classification)
-│   ├── lstm_*.py                              # Other baseline code, standalone adjustments for other tasks
-│   ├── modules.py                            # Helper modules, including Neuron-level models and the Synapse UNET
-│   ├── utils.py                              # Helper functions (e.g., synch decay)
-│   └── resnet.py                             # Wrapper for ResNet featuriser
-├── utils
-│   ├── housekeeping.py                       # Helper functions for keeping things neat
-│   ├── losses.py                             # Loss functions for various tasks (mostly with reshaping stuff)
-│   └── schedulers.py                         # Helper wrappers for learning rate schedulers
-└── checkpoints
-    └── imagenet, mazes, ...                  # Checkpoint directories (see google drive link for files)
+**How the attention is structured:**
+- **Query & Key:** Projected from the full history of post-activations `(B, D, T)`, reshaped to `(B, T, D)`
+- **Value:** Only the *current* timestep's post-activations `(B, D)`, reshaped to `(B, 1, D)`
 
+Using only the current timestep as Value means the output is a `(B, D)` vector — a drop-in replacement for S_out and S_action with no downstream changes needed.
+
+**Temporal decay:** A per-neuron learnable decay parameter `exp(-λ)` is applied to the activation history before feeding it into attention, giving the model control over how much weight to place on older activations. This replaces the need for a hard memory cutoff as the primary recency mechanism.
+
+**Multi-head support:** The attention block supports multiple heads, grouping neurons into subsets that attend within themselves — analogous to region-level specialisation in the brain, and a practical way to manage the O(D²) complexity of full cross-neuron attention.
+
+The key implementation lives in `compute_attention_synchronisation` inside `ContinuousThoughtMachineAttn` (`models/ctm_attn.py`).
+
+---
+
+## Results
+
+All hyperparameters were kept identical to the baselines in the original example notebooks, except where noted.
+
+| Task | Baseline Train Acc | CTM_Attn Train Acc | Baseline Test Acc | CTM_Attn Test Acc |
+|------|-------------------|--------------------|--------------------|-------------------|
+| MNIST | 96.9% | **99.2%** | 96.8% | **99.0%** |
+| Maze | 70.3% | **84.4%** | **50.8%** | 44.6% |
+
+MNIST used 4 attention heads (~1M params); Maze used 8 attention heads (~13M params). Both used `resnet18-2` backbone and `learnable-fourier` positional embeddings.
+
+The MNIST improvement is consistent across train and test. The maze result shows strong training gains; the test gap likely reflects the added parameters and could likely be addressed with an increase in data.
+
+> Note: a proper ablation (matched parameter count) would be needed to isolate the contribution of the attention mechanism itself vs. the additional parameters.
+
+---
+
+## Usage
+
+The `ContinuousThoughtMachineAttn` class is a drop-in replacement for the original `ContinuousThoughtMachine`. The interface and return values are identical.
+
+```python
+from models.ctm_attn import ContinuousThoughtMachineAttn
+
+model = ContinuousThoughtMachineAttn(
+    iterations=10,
+    d_model=256,
+    d_input=64,
+    heads=8,
+    n_synch_out=64,       # kept for compatibility, not used
+    n_synch_action=64,    # kept for compatibility, not used
+    synapse_depth=3,
+    memory_length=10,
+    deep_nlms=True,
+    memory_hidden_dims=128,
+    do_layernorm_nlm=False,
+    out_dims=10,
+    backbone_type='resnet18-2',
+    positional_embedding_type='learnable-fourier',
+    num_attn_heads=4,     # new: number of heads for synchronisation attention
+)
+
+predictions, certainties, synch_out = model(x)
 ```
 
-## Setup
-To set up the environment using conda:
+The existing example notebooks from the original repo work without modification — just swap the import and add `num_attn_heads` to the config.
 
-```
-conda create --name=ctm python=3.12
-conda activate ctm
-pip install -r requirements.txt
-```
+---
 
-If there are issues with PyTorch versions, the following can be ran:
-```
-pip uninstall torch
-pip install torch --index-url https://download.pytorch.org/whl/cu121
-```
+## Key Parameters
 
-## Model training
-Each task has its own (set of) training code. See for instance [tasks/image_classification/train.py](tasks/image_classification/train.py). We have set it up like this to ensure ease-of-use as opposed to clinical efficiency. This code is for researchers and we hope to have it shared in a way that fosters collaboration and learning. 
+| Parameter | Description |
+|-----------|-------------|
+| `num_attn_heads` | Number of heads in the synchronisation attention block. Must divide `d_model`. |
+| `temporal_decay` | Learnable per-neuron decay applied to activation history (initialised to 0, i.e. no decay). |
 
-While we have provided reasonable defaults in the argparsers of each training setup, scripts to replicate the setups in the paper will typically be found in the accompanying script folders. If you simply want to dive in, run the following as a module (setup like this to make it easy to run many high-level training scripts from the top directory):
+All other parameters are inherited from the original CTM and are documented there.
 
-```
-python -m tasks.image_classification.train
-```
-For debugging in VSCode, this configuration example might be helpful to you:
-```
-{
-    "name": "Debug: train image classifier",
-    "type": "debugpy",
-    "request": "launch",
-    "module": "tasks.image_classification.train",
-    "console": "integratedTerminal",
-    "justMyCode": false
+---
+
+## Possible Future Directions
+
+- **Ablation study** with matched parameter counts to isolate attention's contribution
+- **Bottlenecking cross-neuron attention** — grouping neurons or projecting through an MLP before attention to reduce O(D²) cost
+- **Separate S_out and S_action** — currently both use the same attention output; decoupling them may help on tasks where action and prediction benefit from different synchronisation signals
+- **Asymmetric Q/K history windows** — using different history lengths for query vs key projections
+
+---
+
+## Citation
+
+If you use this work, please also cite the original CTM paper:
+
+```bibtex
+@article{sakana2025ctm,
+  title={Continuous Thought Machines},
+  author={Sakana AI},
+  journal={arXiv preprint arXiv:2505.05522},
+  year={2025}
 }
 ```
-
-
-## Running analyses
-
-We also provide analysis and plotting code to replicate many of the plots in our paper. See `tasks/.../analysis/*` for more details on that. We also provide some data (e.g., the mazes we generated for training) and checkpoints (see [here](#checkpoints-and-data)). Note that ffmpeg is required for generating mp4 files from the analysis scripts. It can be installed with:
-```
-conda install -c conda-forge ffmpeg
-```
-
-
-## Checkpoints and data
-You can download the data and checkpoints from here: 
-- checkpoints: https://drive.google.com/drive/folders/1vSg8T7FqP-guMDk1LU7_jZaQtXFP9sZg
-- maze data: https://drive.google.com/file/d/1cBgqhaUUtsrll8-o2VY42hPpyBcfFv86/view?usp=drivesdk
-
-Checkpoints go in the `checkpoints` folder. For instance, when properly populated, the checkpoints folder will have the maze checkpoint in `checkpoints/mazes/...`
-
-## Note on pull requests
-_(Update: 29 December 2025)_
-
-Please note that all pull requests will be assessed for their contributions. Those that involve either a bug-fix or an efficiency upgrade will likely pass review. 
-
-On the other hand, any pull requests that change the fundamental functionality of this repository will be immediately rejected and closed: the purpose of this repository is to accompany the Continuous Thought Machines paper and, therefore, it must remain an accurate reflection of that work. 
-
-That being said, we are happy to consider advances and deviations from the original repository as long as they:
-1. Are sufficiently self-contained (single feature additions per pull request).
-2. Well-justified with quantitative evidence.
-3. Not overclaiming to be _fundamental_.
-4. Do not change the default behavior of the original codebase. For example, while early stopping is useful, this should be set up in a way that is an optional extra, as opposed to the default behavior.
